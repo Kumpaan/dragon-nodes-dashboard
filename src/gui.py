@@ -86,10 +86,78 @@ class DashboardWindow(QMainWindow):
         # Eradicate the transient item from the visual list
         self.node_list.takeItem(current_row)
 
+    @asyncSlot()
+    async def start_node(self):
+        current_row = self.node_list.currentRow()
+        if current_row < 0:
+            return
+
+        item = self.node_list.item(current_row)
+        node_name = item.text()
+
+        # Prevent spawning duplicate nodes and fucking up port bindings
+        if node_name in self.running_processes:
+            self.terminal_output.append(
+                f"<span style='color: yellow;'>[SYSTEM] {node_name} is already executing.</span>")
+            return
+
+        commands = await self.config_manager.load()
+        command_str = commands[current_row]["command"]
+
+        self.terminal_output.append(f"<span style='color: cyan;'>[SYSTEM] Initiating {node_name}: {command_str}</span>")
+
+        # Spawn the non-blocking subprocess
+        process = await asyncio.create_subprocess_shell(
+            command_str,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        self.running_processes[node_name] = process
+        self.stop_btn.setEnabled(True)
+
+        # Fire and forget the stream readers
+        asyncio.create_task(self.stream_terminal(process.stdout, node_name, is_error=False))
+        asyncio.create_task(self.stream_terminal(process.stderr, node_name, is_error=True))
+
+    async def stream_terminal(self, stream, node_name, is_error):
+        """Continuously reads the asynchronous byte stream and renders it to the GUI."""
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+
+            # Decode the raw bytes into a string
+            decoded_line = line.decode().strip()
+            if decoded_line:
+                # Differentiate stderr (red) from stdout (green)
+                color = "#ff3333" if is_error else "#00ff00"
+                formatted_text = f"<span style='color: {color};'>[{node_name}] {decoded_line}</span>"
+                self.terminal_output.append(formatted_text)
+
+        # Purge the process from the registry once the stream dies
+        if node_name in self.running_processes and stream == self.running_processes[node_name].stdout:
+            self.terminal_output.append(f"<span style='color: yellow;'>[SYSTEM] {node_name} terminated.</span>")
+            del self.running_processes[node_name]
+
+    @asyncSlot()
+    async def stop_node(self):
+        current_row = self.node_list.currentRow()
+        if current_row < 0:
+            return
+
+        node_name = self.node_list.item(current_row).text()
+
+        if node_name in self.running_processes:
+            process = self.running_processes[node_name]
+            process.terminate()  # Send SIGTERM
+            self.terminal_output.append(f"<span style='color: yellow;'>[SYSTEM] Sent SIGTERM to {node_name}.</span>")
+
     def __init__(self, config_manager):
         super().__init__()
         self.node_list = QListWidget()
         self.config_manager = config_manager
+        self.running_processes = {}
         self.setWindowTitle("Dragon Nodes Dashboard")
         self.resize(1100, 700)
 
@@ -147,6 +215,9 @@ class DashboardWindow(QMainWindow):
         action_layout.addWidget(self.start_btn)
         action_layout.addWidget(self.stop_btn)
         right_layout.addLayout(action_layout)
+
+        self.start_btn.clicked.connect(self.start_node)
+        self.stop_btn.clicked.connect(self.stop_node)
 
         # Terminal output matrix
         self.terminal_output = QTextEdit()
