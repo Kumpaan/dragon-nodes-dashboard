@@ -254,6 +254,20 @@ class DashboardWindow(QMainWindow):
             process.terminate()  # Send SIGTERM
             self.terminal_output.append(f"<span style='color: yellow;'>[SYSTEM] Sent SIGTERM to {node_name}.</span>")
 
+    @asyncSlot()
+    async def reconnect_env(self):
+        self.terminal_output.append(
+            "<span style='color: yellow;'>[SYSTEM] Flushing dead sockets and forcing network reconnect...</span>")
+
+        # Nuke the dead socket in the executor
+        self.executor.reset()
+
+        # Clear the UI roster
+        self.node_list.clear()
+
+        # Re-fetch the configuration
+        await self.initialize_data()
+
     def __init__(self, config_manager, executor):
         super().__init__()
         self.node_list = QListWidget()
@@ -281,7 +295,15 @@ class DashboardWindow(QMainWindow):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        left_layout.addWidget(QLabel("Registered Nodes"))
+        # Top header with Reconnect button
+        header_layout = QHBoxLayout()
+        header_layout.addWidget(QLabel("Registered Nodes"))
+
+        self.reconnect_btn = QPushButton("Reconnect")
+        self.reconnect_btn.clicked.connect(self.reconnect_env)
+        header_layout.addWidget(self.reconnect_btn)
+
+        left_layout.addLayout(header_layout)
         left_layout.addWidget(self.node_list)
 
         # CRUD Buttons

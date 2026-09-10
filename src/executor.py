@@ -16,6 +16,11 @@ class BaseExecutor(ABC):
         """Sends the termination signal to the running process."""
         pass
 
+    @abstractmethod
+    def reset(self) -> None:
+        """Forces to dump any cached connections or stater."""
+        pass
+
 
 class LocalExecutor(BaseExecutor):
     """Executes commands natively on the host machine."""
@@ -30,6 +35,9 @@ class LocalExecutor(BaseExecutor):
     def terminate(self, process):
         if process.returncode is None:
             process.terminate()
+
+    def reset(self):
+        pass
 
 
 class SSHExecutor(BaseExecutor):
@@ -60,3 +68,9 @@ class SSHExecutor(BaseExecutor):
     def terminate(self, process):
         # asyncssh processes possess a terminate method identical to local subprocesses
         process.terminate()
+
+    def reset(self):
+        # If a connection exists, aggressively close it and wipe it from memory
+        if self._conn:
+            self._conn.close()
+            self._conn = None
