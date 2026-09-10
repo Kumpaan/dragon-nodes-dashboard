@@ -58,12 +58,10 @@ class LocalConfigManager(BaseConfigManager):
         await asyncio.to_thread(_write)
 
 class SSHConfigManager(BaseConfigManager):
-    """
-    SSH configuration manager.
-    """
-    def __init__(self, host: str, username: str, key_path: str = None):
+    def __init__(self, host: str, username: str, password: str = None, key_path: str = None):
         self.host = host
         self.username = username
+        self.password = password
         self.key_path = key_path
         self.remote_path = f"/home/{self.username}/{CONFIG_DIR}/{CONFIG_FILE}"
         self.remote_dir = f"/home/{self.username}/{CONFIG_DIR}"
@@ -72,8 +70,10 @@ class SSHConfigManager(BaseConfigManager):
         conn = await asyncssh.connect(
             self.host,
             username=self.username,
+            password=self.password,
             client_keys=[self.key_path] if self.key_path else None,
-            known_hosts=None # Bypass known_hosts prompt for local tailscale dev
+            known_hosts=None,
+            login_timeout=5  # Force it to fail fast if the connection is dead
         )
         return await conn.start_sftp_client()
 

@@ -33,11 +33,10 @@ class LocalExecutor(BaseExecutor):
 
 
 class SSHExecutor(BaseExecutor):
-    """Executes commands on a remote machine via an SSH tunnel."""
-
-    def __init__(self, host: str, username: str, key_path: str = None):
+    def __init__(self, host: str, username: str, password: str = None, key_path: str = None):
         self.host = host
         self.username = username
+        self.password = password
         self.key_path = key_path
         self._conn = None
 
@@ -46,8 +45,10 @@ class SSHExecutor(BaseExecutor):
             self._conn = await asyncssh.connect(
                 self.host,
                 username=self.username,
+                password=self.password,
                 client_keys=[self.key_path] if self.key_path else None,
-                known_hosts=None
+                known_hosts=None,
+                login_timeout=5
             )
         return self._conn
 

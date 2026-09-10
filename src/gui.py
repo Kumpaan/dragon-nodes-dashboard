@@ -1,9 +1,9 @@
 import asyncio
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
-    QPushButton, QTextEdit, QLabel, QSplitter, QDialog, QFormLayout, QLineEdit, QDialogButtonBox
+    QPushButton, QTextEdit, QLabel, QSplitter, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QRadioButton
 )
 from qasync import asyncSlot
 
@@ -37,23 +37,119 @@ class CommandDialog(QDialog):
                 "command": self.cmd_input.text().strip(),
             }
 
+class ConnectionDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Environment Selection")
+        self.setMinimumWidth(350)
+
+        # Initialize Qt's native persistent storage
+        self.settings = QSettings("DragonNodes", "Dashboard")
+
+        main_layout = QVBoxLayout(self)
+
+        # Mode Selection
+        self.local_radio = QRadioButton("Local Execution")
+        self.ssh_radio = QRadioButton("Remote Execution (SSH via Tailscale)")
+
+        main_layout.addWidget(self.local_radio)
+        main_layout.addWidget(self.ssh_radio)
+
+        # SSH Configuration Stack
+        self.ssh_widget = QWidget()
+        ssh_layout = QFormLayout(self.ssh_widget)
+
+        self.host_input = QLineEdit()
+        self.host_input.setPlaceholderText("e.g., 100.x.x.x")
+        self.user_input = QLineEdit()
+        self.user_input.setPlaceholderText("e.g., ubuntu")
+
+        self.pass_input = QLineEdit()
+        self.pass_input.setPlaceholderText("Password (if no key)")
+        self.pass_input.setEchoMode(QLineEdit.EchoMode.Password)  # Hide the text
+
+        self.key_input = QLineEdit()
+        self.key_input.setPlaceholderText("e.g., ~/.ssh/id_rsa (Optional)")
+
+        ssh_layout.addRow("Tailscale IP:", self.host_input)
+        ssh_layout.addRow("Username:", self.user_input)
+        ssh_layout.addRow("Password:", self.pass_input)
+        ssh_layout.addRow("Private Key Path:", self.key_input)
+
+        main_layout.addWidget(self.ssh_widget)
+
+        # Restore previous state
+        last_mode = self.settings.value("last_mode", "local")
+        if last_mode == "ssh":
+            self.ssh_radio.setChecked(True)
+            self.ssh_widget.setVisible(True)
+        else:
+            self.local_radio.setChecked(True)
+            self.ssh_widget.setVisible(False)
+
+        self.host_input.setText(self.settings.value("ssh_host", ""))
+        self.user_input.setText(self.settings.value("ssh_user", ""))
+        self.pass_input.setText(self.settings.value("ssh_pass", ""))
+        self.key_input.setText(self.settings.value("ssh_key", ""))
+
+        # Toggle SSH fields visibility based on radio selection
+        self.ssh_radio.toggled.connect(self.ssh_widget.setVisible)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        main_layout.addWidget(self.buttons)
+
+    def accept(self):
+        self.settings.setValue("last_mode", "ssh" if self.ssh_radio.isChecked() else "local")
+        self.settings.setValue("ssh_host", self.host_input.text().strip())
+        self.settings.setValue("ssh_user", self.user_input.text().strip())
+        self.settings.setValue("ssh_pass", self.pass_input.text().strip())
+        self.settings.setValue("ssh_key", self.key_input.text().strip())
+        super().accept()
+
+    def get_config(self) -> dict:
+        is_ssh = self.ssh_radio.isChecked()
+        return {
+            "mode": "ssh" if is_ssh else "local",
+            "host": self.host_input.text().strip() if is_ssh else None,
+            "username": self.user_input.text().strip() if is_ssh else None,
+            "password": self.pass_input.text().strip() if is_ssh else None,
+            "key_path": self.key_input.text().strip() if is_ssh else None
+        }
+
 class DashboardWindow(QMainWindow):
-    @asyncSlot()
-    async def add_node(self):
+    def add_node(self):
+        # Synchronous execution. No @asyncSlot!
         dialog = CommandDialog(self)
         if dialog.exec():
             data = dialog.get_data()
             if not data["name"] or not data["command"]:
-                return  # Don't save empty bullshit
+                return
 
-            # Fetch, mutate, persist
+                # Log the intent BEFORE we hand off to the network
+            self.terminal_output.append(
+                f"<span style='color: yellow;'>[SYSTEM] Attempting to save node '{data['name']}' over network...</span>"
+            )
+
+            # Spawn the async I/O task safely in the background
+            asyncio.create_task(self._async_save_node(data))
+
+    async def _async_save_node(self, data):
+        """Dedicated coroutine for handling the network payload."""
+        try:
             commands = await self.config_manager.load()
             commands.append(data)
             await self.config_manager.save(commands)
 
-            # Reflect the mutation in the UI
             self.node_list.addItem(data["name"])
-
+            self.terminal_output.append(
+                f"<span style='color: cyan;'>[SYSTEM] Successfully saved node: {data['name']}</span>"
+            )
+        except Exception as e:
+            self.terminal_output.append(
+                f"<span style='color: #ff3333;'>[SYSTEM ERROR] Failed to save config: {str(e)}</span>"
+            )
     @asyncSlot()
     async def edit_node(self):
         current_row = self.node_list.currentRow()
@@ -121,14 +217,19 @@ class DashboardWindow(QMainWindow):
                 f"<span style='color: #ff3333;'>[SYSTEM ERROR] Failed to execute: {str(e)}</span>")
 
     async def stream_terminal(self, stream, node_name, is_error):
-        """Continuously reads the asynchronous byte stream and renders it to the GUI."""
+        """Continuously reads the asynchronous stream and renders it to the GUI."""
         while True:
             line = await stream.readline()
             if not line:
                 break
 
-            # Decode the raw bytes into a string
-            decoded_line = line.decode().strip()
+            # Handle the architectural discrepancy: local bytes vs. SSH strings
+            if isinstance(line, bytes):
+                # errors='replace' prevents a crash if a rogue non-UTF8 byte slips through
+                decoded_line = line.decode('utf-8', errors='replace').strip()
+            else:
+                decoded_line = line.strip()
+
             if decoded_line:
                 # Differentiate stderr (red) from stdout (green)
                 color = "#ff3333" if is_error else "#00ff00"
@@ -239,9 +340,12 @@ class DashboardWindow(QMainWindow):
         event.accept()
 
     async def initialize_data(self):
-        """
-        Asynchronously queries the configuration JSON and populates the dashboard.
-        """
-        commands = await self.config_manager.load()
-        for cmd in commands:
-            self.node_list.addItem(cmd.get("name", "Corrupted Entry"))
+        """Asynchronously queries the configuration JSON and populates the dashboard."""
+        self.terminal_output.append("<span style='color: yellow;'>[SYSTEM] Establishing environment connection...</span>")
+        try:
+            commands = await self.config_manager.load()
+            for cmd in commands:
+                self.node_list.addItem(cmd.get("name", "Corrupted Entry"))
+            self.terminal_output.append("<span style='color: #00ff00;'>[SYSTEM] Configuration loaded successfully.</span>")
+        except Exception as e:
+            self.terminal_output.append(f"<span style='color: #ff3333;'>[SYSTEM ERROR] Failed to load configuration: {str(e)}</span>")
