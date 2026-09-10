@@ -1,20 +1,101 @@
 import asyncio
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QListWidget, QPushButton, QTextEdit, QLabel, QSplitter
+    QListWidget, QPushButton, QTextEdit, QLabel, QSplitter, QDialog, QFormLayout, QLineEdit, QDialogButtonBox
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
+from qasync import asyncSlot
+
+class CommandDialog(QDialog):
+    def __init__(self, parent=None, name="", command=""):
+        super().__init__(parent)
+        self.setWindowTitle("Node Configuration")
+        self.setMinimumWidth(400)
+
+        layout = QFormLayout(self)
+
+        self.name_input = QLineEdit(self)
+        self.name_input.setText(name)
+        self.name_input.setPlaceholderText("e.g., Camera Fusion")
+        layout.addRow("Node Name:", self.name_input)
+
+        self.cmd_input = QLineEdit(self)
+        self.cmd_input.setText(command)
+        self.cmd_input.setPlaceholderText("e.g., ros2 run camera_fusion_node camera_fusion_node")
+        layout.addRow("ROS 2 Command:", self.cmd_input)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+    def get_data(self) -> dict:
+            return {
+                "name": self.name_input.text().strip(),
+                "command": self.cmd_input.text().strip(),
+            }
 
 class DashboardWindow(QMainWindow):
+    @asyncSlot()
+    async def add_node(self):
+        dialog = CommandDialog(self)
+        if dialog.exec():
+            data = dialog.get_data()
+            if not data["name"] or not data["command"]:
+                return  # Don't save empty bullshit
+
+            # Fetch, mutate, persist
+            commands = await self.config_manager.load()
+            commands.append(data)
+            await self.config_manager.save(commands)
+
+            # Reflect the mutation in the UI
+            self.node_list.addItem(data["name"])
+
+    @asyncSlot()
+    async def edit_node(self):
+        current_row = self.node_list.currentRow()
+        if current_row < 0:
+            return  # Nothing selected
+
+        commands = await self.config_manager.load()
+        target_cmd = commands[current_row]
+
+        dialog = CommandDialog(self, name=target_cmd["name"], command=target_cmd["command"])
+        if dialog.exec():
+            new_data = dialog.get_data()
+            if not new_data["name"] or not new_data["command"]:
+                return
+
+            commands[current_row] = new_data
+            await self.config_manager.save(commands)
+
+            # Update the specific item in the QListWidget
+            self.node_list.item(current_row).setText(new_data["name"])
+
+    @asyncSlot()
+    async def delete_node(self):
+        current_row = self.node_list.currentRow()
+        if current_row < 0:
+            return
+
+        commands = await self.config_manager.load()
+        commands.pop(current_row)
+        await self.config_manager.save(commands)
+
+        # Eradicate the transient item from the visual list
+        self.node_list.takeItem(current_row)
+
     def __init__(self, config_manager):
         super().__init__()
+        self.node_list = QListWidget()
         self.config_manager = config_manager
         self.setWindowTitle("Dragon Nodes Dashboard")
         self.resize(1100, 700)
 
         self._scaffold_ui()
 
-        asyncio.create_task(self.initialize_data())
+        QTimer.singleShot(0, lambda: asyncio.create_task(self.initialize_data()))
 
     def _scaffold_ui(self):
         central_widget = QWidget()
@@ -22,7 +103,7 @@ class DashboardWindow(QMainWindow):
         main_layout = QVBoxLayout(central_widget)
 
         # QSplitter allows dynamic resizing of the two panels
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(splitter)
 
         # === LEFT PANEL: Node config ===
@@ -42,6 +123,10 @@ class DashboardWindow(QMainWindow):
         btn_layout.addWidget(self.edit_btn)
         btn_layout.addWidget(self.delete_btn)
         left_layout.addLayout(btn_layout)
+
+        self.add_btn.clicked.connect(self.add_node)
+        self.edit_btn.clicked.connect(self.edit_node)
+        self.delete_btn.clicked.connect(self.delete_node)
 
         splitter.addWidget(left_panel)
 

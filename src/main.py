@@ -24,5 +24,5 @@ def execute():
     with loop:
         loop.run_forever()
 
-    if __name__ == "__main__":
-        execute()
+if __name__ == "__main__":
+    execute()
