@@ -13,7 +13,7 @@ class BaseConfigManager(ABC):
     Abstract base class for configuration managers.
     """
     @abstractmethod
-    async def load(selfself) -> list:
+    async def load(self) -> list:
         pass
 
     @abstractmethod
@@ -28,6 +28,13 @@ class LocalConfigManager(BaseConfigManager):
         # Expand user path natively
         self.config_path = Path.home() / CONFIG_DIR / CONFIG_FILE
         self._ensure_file_exists()
+
+    # def __init__(self, base_dir: Path = None):
+    #     # TEST: Allow overriding the base directory for testing.
+    #     # If no base_dir is provided, it defaults to the user's home directory.
+    #     self.base_dir = base_dir or Path.home()
+    #     self.config_path = self.base_dir / CONFIG_DIR / CONFIG_FILE
+    #     self._ensure_file_exists()
 
     def _ensure_file_exists(self):
         # Synchronous setup is acceptable during initialization before the event loop runs
@@ -44,10 +51,11 @@ class LocalConfigManager(BaseConfigManager):
         return await asyncio.to_thread(_read)
 
     async def save (self, commands: list) -> None:
-        async def _write():
+        def _write():
             with open(self.config_path, "w") as f:
                 json.dump(commands, f, indent=4)
-            await asyncio.to_thread(_write)
+                f.flush()
+        await asyncio.to_thread(_write)
 
 class SSHConfigManager(BaseConfigManager):
     """
