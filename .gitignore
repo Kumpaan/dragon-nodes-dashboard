@@ -1,0 +1,12 @@
+# Environments
+ventv/
+env/
+.venv/
+
+# IDE
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
