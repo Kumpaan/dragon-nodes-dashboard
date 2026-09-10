@@ -1,10 +1,12 @@
 import asyncio
-from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QListWidget, QPushButton, QTextEdit, QLabel, QSplitter, QDialog, QFormLayout, QLineEdit, QDialogButtonBox
-)
+
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
+    QPushButton, QTextEdit, QLabel, QSplitter, QDialog, QFormLayout, QLineEdit, QDialogButtonBox
+)
 from qasync import asyncSlot
+
 
 class CommandDialog(QDialog):
     def __init__(self, parent=None, name="", command=""):
@@ -107,18 +109,16 @@ class DashboardWindow(QMainWindow):
         self.terminal_output.append(f"<span style='color: cyan;'>[SYSTEM] Initiating {node_name}: {command_str}</span>")
 
         # Spawn the non-blocking subprocess
-        process = await asyncio.create_subprocess_shell(
-            command_str,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
+        try:
+            process = await self.executor.execute(command_str)
+            self.running_processes[node_name] = process
+            self.stop_btn.setEnabled(True)
 
-        self.running_processes[node_name] = process
-        self.stop_btn.setEnabled(True)
-
-        # Fire and forget the stream readers
-        asyncio.create_task(self.stream_terminal(process.stdout, node_name, is_error=False))
-        asyncio.create_task(self.stream_terminal(process.stderr, node_name, is_error=True))
+            asyncio.create_task(self.stream_terminal(process.stdout, node_name, is_error=False))
+            asyncio.create_task(self.stream_terminal(process.stderr, node_name, is_error=True))
+        except Exception as e:
+            self.terminal_output.append(
+                f"<span style='color: #ff3333;'>[SYSTEM ERROR] Failed to execute: {str(e)}</span>")
 
     async def stream_terminal(self, stream, node_name, is_error):
         """Continuously reads the asynchronous byte stream and renders it to the GUI."""
@@ -153,10 +153,11 @@ class DashboardWindow(QMainWindow):
             process.terminate()  # Send SIGTERM
             self.terminal_output.append(f"<span style='color: yellow;'>[SYSTEM] Sent SIGTERM to {node_name}.</span>")
 
-    def __init__(self, config_manager):
+    def __init__(self, config_manager, executor):
         super().__init__()
         self.node_list = QListWidget()
         self.config_manager = config_manager
+        self.executor = executor
         self.running_processes = {}
         self.setWindowTitle("Dragon Nodes Dashboard")
         self.resize(1100, 700)
@@ -229,6 +230,13 @@ class DashboardWindow(QMainWindow):
         splitter.addWidget(right_panel)
 
         splitter.setSizes([330, 770])
+
+    def closeEvent(self, event):
+        """Intercepts the window termination signal to eradicate active processes."""
+        for node_name, process in self.running_processes.items():
+            self.executor.terminate(process)
+            print(f"Terminated {node_name} during graceful shutdown.")
+        event.accept()
 
     async def initialize_data(self):
         """

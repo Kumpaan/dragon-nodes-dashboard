@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QApplication
 from qasync import QEventLoop
 from src.gui import DashboardWindow
 from src.config import LocalConfigManager
+from src.executor import LocalExecutor
 
 def execute():
     # Init the QT App framework
@@ -15,9 +16,10 @@ def execute():
 
     # Init data layer
     config_manager = LocalConfigManager()
+    executor = LocalExecutor()
 
     # Instantiate and render the GUI
-    window = DashboardWindow(config_manager)
+    window = DashboardWindow(config_manager, executor)
     window.show()
 
     #Transfer execution control to the event loop. This blocks indefinitely until the user closes the window
