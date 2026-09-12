@@ -305,7 +305,7 @@ class DashboardWindow(QMainWindow):
         self.groups = {}
         self.current_editing_node = None
 
-        self.setWindowTitle("TU Brno Racing - Driverless Command Center")
+        self.setWindowTitle("Dragon Node Description")
         self.resize(1500, 900)
         self.setStyleSheet(STYLESHEET)
 
@@ -400,7 +400,7 @@ class DashboardWindow(QMainWindow):
         self.node_edit_page = QWidget()
         edit_layout = QVBoxLayout(self.node_edit_page)
 
-        edit_header = QLabel("Edit Node Architecture")
+        edit_header = QLabel("Edit Node Properties")
         edit_header.setStyleSheet("font-size: 18px; font-weight: bold; color: #E6B522;")
         edit_layout.addWidget(edit_header)
 
@@ -420,11 +420,11 @@ class DashboardWindow(QMainWindow):
         edit_layout.addLayout(form_layout)
 
         node_actions = QHBoxLayout()
-        save_btn = QPushButton("Commit Changes")
+        save_btn = QPushButton("Save Changes")
         save_btn.setObjectName("ActionBtn")
         save_btn.clicked.connect(self._save_node_context)
 
-        del_btn = QPushButton("Obliterate Node")
+        del_btn = QPushButton("Delete Node")
         del_btn.setObjectName("DangerBtn")
         del_btn.clicked.connect(self._delete_node_context)
 
