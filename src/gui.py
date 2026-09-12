@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
     QPushButton, QTextEdit, QLabel, QSplitter, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QRadioButton,
-    QStackedWidget
+    QStackedWidget, QTreeWidget, QTreeWidgetItem
 )
 from qasync import asyncSlot
 from PySide6.QtGui import QColor
@@ -14,12 +14,17 @@ from PySide6.QtGui import QColor
 ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
 class CommandDialog(QDialog):
-    def __init__(self, parent=None, name="", command=""):
+    def __init__(self, parent=None, group="", name="", command=""):
         super().__init__(parent)
         self.setWindowTitle("Node Configuration")
         self.setMinimumWidth(400)
 
         layout = QFormLayout(self)
+
+        self.group_input = QLineEdit(self)
+        self.group_input.setText(group)
+        self.group_input.setPlaceholderText("e.g., Perception (Optional)")
+        layout.addRow("Group:", self.group_input)
 
         self.name_input = QLineEdit(self)
         self.name_input.setText(name)
@@ -37,10 +42,11 @@ class CommandDialog(QDialog):
         layout.addWidget(self.buttons)
 
     def get_data(self) -> dict:
-            return {
-                "name": self.name_input.text().strip(),
-                "command": self.cmd_input.text().strip(),
-            }
+        return {
+            "group": self.group_input.text().strip() or "Ungrouped",
+            "name": self.name_input.text().strip(),
+            "command": self.cmd_input.text().strip(),
+        }
 
 class ConnectionDialog(QDialog):
     def __init__(self, parent=None):
@@ -166,10 +172,11 @@ class DashboardWindow(QMainWindow):
         header_layout.addWidget(self.reconnect_btn)
         left_layout.addLayout(header_layout)
 
-        # Node Roster
-        self.node_list = QListWidget()
-        self.node_list.currentItemChanged.connect(self.switch_detail_view)
-        left_layout.addWidget(self.node_list)
+        # Node Roster Tree (Replaces QListWidget)
+        self.node_tree = QTreeWidget()
+        self.node_tree.setHeaderHidden(True)
+        self.node_tree.currentItemChanged.connect(self.switch_detail_view)
+        left_layout.addWidget(self.node_tree)
 
         # CRUD Buttons
         btn_layout = QHBoxLayout()
@@ -235,24 +242,51 @@ class DashboardWindow(QMainWindow):
     # DATA LAYER & CONNECTION
     # ==========================================
     async def initialize_data(self):
-        self.system_log.append("<span style='color: yellow;'>[SYSTEM] Establishing environment connection...</span>")
+        self.system_log.append(
+            "<span style='color: yellow;'>[SYSTEM] Establishing environment connection...</span>")
         try:
-            commands = await self.config_manager.load()
-            for cmd in commands:
-                name = cmd.get("name", "Corrupted Entry")
-                self.node_list.addItem(name)
-                self._create_node_terminal(name)
-            self.system_log.append("<span style='color: #00ff00;'>[SYSTEM] Configuration loaded successfully.</span>")
+            await self._refresh_ui()
+            self.system_log.append(
+                "<span style='color: #00ff00;'>[SYSTEM] Configuration loaded successfully.</span>")
         except Exception as e:
             self.system_log.append(
-                f"<span style='color: #ff3333;'>[SYSTEM ERROR] Failed to load configuration: {str(e)}</span>")
+                f"<span style='color: #ff3333;'>[SYSTEM ERROR] Failed to load config: {str(e)}</span>")
+
+    async def _refresh_ui(self):
+        """Clears the tree and redraws it from the JSON payload."""
+        self.node_tree.clear()
+        commands = await self.config_manager.load()
+
+        groups = {}
+        for cmd in commands:
+            group_name = cmd.get("group", "Ungrouped")
+            node_name = cmd.get("name", "Corrupted Entry")
+            command_str = cmd.get("command", "")
+
+            # Scaffold the parent folder
+            if group_name not in groups:
+                parent = QTreeWidgetItem([group_name])
+                parent.setExpanded(True)
+                groups[group_name] = parent
+                self.node_tree.addTopLevelItem(parent)
+
+            # Insert the child
+            child = QTreeWidgetItem([node_name])
+            child.setData(0, Qt.ItemDataRole.UserRole, command_str)
+            groups[group_name].addChild(child)
+
+            self._create_node_terminal(node_name)
+
+            # Re-apply visual state if the process is currently executing
+            if node_name in self.running_processes:
+                child.setForeground(0, QColor("#00ff00"))
 
     @asyncSlot()
     async def reconnect_env(self):
         self.system_log.append(
             "<span style='color: yellow;'>[SYSTEM] Flushing dead sockets and forcing network reconnect...</span>")
         self.executor.reset()
-        self.node_list.clear()
+        self.node_tree.clear()
 
         # Eradicate old buffers
         for widget in self.node_terminals.values():
@@ -283,62 +317,77 @@ class DashboardWindow(QMainWindow):
             commands.append(data)
             await self.config_manager.save(commands)
 
-            self.node_list.addItem(data["name"])
-            self._create_node_terminal(data["name"])
             self.system_log.append(f"<span style='color: cyan;'>[SYSTEM] Successfully saved: {data['name']}</span>")
+            await self._refresh_ui()
         except Exception as e:
             self.system_log.append(
                 f"<span style='color: #ff3333;'>[SYSTEM ERROR] Failed to save config: {str(e)}</span>")
 
     @asyncSlot()
     async def edit_node(self):
-        current_row = self.node_list.currentRow()
-        if current_row < 0: return
+        current_item = self.node_tree.currentItem()
+        if not current_item or current_item.childCount() > 0: return  # Ignore clicks on folders
 
+        target_name = current_item.text(0)
         commands = await self.config_manager.load()
-        target_cmd = commands[current_row]
 
-        dialog = CommandDialog(self, name=target_cmd["name"], command=target_cmd["command"])
+        # Find the node's index in the flat JSON array
+        target_idx = next((i for i, cmd in enumerate(commands) if cmd.get("name") == target_name), None)
+        if target_idx is None: return
+
+        target_cmd = commands[target_idx]
+        dialog = CommandDialog(self, group=target_cmd.get("group", ""), name=target_cmd["name"],
+                               command=target_cmd["command"])
+
         if dialog.exec():
             new_data = dialog.get_data()
             if not new_data["name"] or not new_data["command"]: return
 
-            commands[current_row] = new_data
+            commands[target_idx] = new_data
             await self.config_manager.save(commands)
-            self.node_list.item(current_row).setText(new_data["name"])
             self.system_log.append(f"<span style='color: cyan;'>[SYSTEM] Updated node configuration.</span>")
+            await self._refresh_ui()
 
     @asyncSlot()
     async def delete_node(self):
-        current_row = self.node_list.currentRow()
-        if current_row < 0: return
+        current_item = self.node_tree.currentItem()
+        if not current_item or current_item.childCount() > 0: return  # Ignore clicks on folders
 
-        node_name = self.node_list.item(current_row).text()
-        self._remove_node_terminal(node_name)
+        target_name = current_item.text(0)
+        self._remove_node_terminal(target_name)
 
         commands = await self.config_manager.load()
-        commands.pop(current_row)
+        # Filter out the deleted node
+        commands = [cmd for cmd in commands if cmd.get("name") != target_name]
         await self.config_manager.save(commands)
 
-        self.node_list.takeItem(current_row)
-        self.system_log.append(f"<span style='color: yellow;'>[SYSTEM] Deleted node '{node_name}'.</span>")
+        self.system_log.append(f"<span style='color: yellow;'>[SYSTEM] Deleted node '{target_name}'.</span>")
+        await self._refresh_ui()
 
     # ==========================================
     # PROCESS EXECUTION
     # ==========================================
     @asyncSlot()
     async def start_node(self):
-        current_row = self.node_list.currentRow()
-        if current_row < 0: return
+        current_item = self.node_tree.currentItem()
+        if not current_item: return
 
-        node_name = self.node_list.item(current_row).text()
+        # If it has children, it's a folder. If it has no parent, it's an empty folder.
+        is_group = current_item.childCount() > 0 or current_item.parent() is None
 
+        if is_group:
+            self.system_log.append(
+                f"<span style='color: yellow;'>[SYSTEM] Executing macro group: {current_item.text(0)}</span>")
+            for i in range(current_item.childCount()):
+                child = current_item.child(i)
+                await self._spawn_process(child.text(0), child.data(0, Qt.ItemDataRole.UserRole))
+        else:
+            await self._spawn_process(current_item.text(0), current_item.data(0, Qt.ItemDataRole.UserRole))
+
+    async def _spawn_process(self, node_name: str, command_str: str):
         if node_name in self.running_processes:
             self.system_log.append(f"<span style='color: yellow;'>[SYSTEM] {node_name} is already executing.</span>")
             return
-
-        commands = await self.config_manager.load()
-        command_str = commands[current_row]["command"]
 
         self.system_log.append(f"<span style='color: cyan;'>[SYSTEM] Initiating {node_name}</span>")
         self.node_terminals[node_name].append(f"<span style='color: #888888;'>$ {command_str}</span><br>")
@@ -352,7 +401,8 @@ class DashboardWindow(QMainWindow):
             asyncio.create_task(self.stream_terminal(process.stdout, node_name, is_error=False))
             asyncio.create_task(self.stream_terminal(process.stderr, node_name, is_error=True))
         except Exception as e:
-            self.system_log.append(f"<span style='color: #ff3333;'>[SYSTEM ERROR] Execution failed: {str(e)}</span>")
+            self.system_log.append(
+                f"<span style='color: #ff3333;'>[SYSTEM ERROR] Execution failed for {node_name}: {str(e)}</span>")
 
     async def stream_terminal(self, stream, node_name, is_error):
         while True:
@@ -381,26 +431,37 @@ class DashboardWindow(QMainWindow):
 
     @asyncSlot()
     async def stop_node(self):
-        current_row = self.node_list.currentRow()
-        if current_row < 0: return
+        current_item = self.node_tree.currentItem()
+        if not current_item: return
 
-        node_name = self.node_list.item(current_row).text()
-        if node_name in self.running_processes:
-            process = self.running_processes[node_name]
-            self.executor.terminate(process)
-            self.system_log.append(f"<span style='color: yellow;'>[SYSTEM] Sent SIGTERM to {node_name}.</span>")
+        # Determine if a folder or a file was clicked
+        is_group = current_item.childCount() > 0 or current_item.parent() is None
+
+        if is_group:
+            # Macro stop: Murder everything inside the folder
+            for i in range(current_item.childCount()):
+                node_name = current_item.child(i).text(0)
+                if node_name in self.running_processes:
+                    self.executor.terminate(self.running_processes[node_name])
+                    self.system_log.append(f"<span style='color: yellow;'>[SYSTEM] Sent SIGTERM to {node_name}.</span>")
+        else:
+            # Single stop
+            node_name = current_item.text(0)
+            if node_name in self.running_processes:
+                self.executor.terminate(self.running_processes[node_name])
+                self.system_log.append(f"<span style='color: yellow;'>[SYSTEM] Sent SIGTERM to {node_name}.</span>")
 
     # ==========================================
     # UI HELPERS & OVERRIDES
     # ==========================================
     def switch_detail_view(self, current, previous):
-        if not current:
+        if not current or current.childCount() > 0:  # Ignore clicks on folders
             self.detail_stack.setCurrentWidget(self.default_page)
             self.title_label.setText("Select a node to inspect")
             self.stop_btn.setEnabled(False)
             return
 
-        node_name = current.text()
+        node_name = current.text(0)
         if node_name in self.node_terminals:
             self.detail_stack.setCurrentWidget(self.node_terminals[node_name])
             self.title_label.setText(f"Inspecting: {node_name}")
@@ -423,11 +484,15 @@ class DashboardWindow(QMainWindow):
 
     def _set_node_status_color(self, node_name: str, is_running: bool):
         color = QColor("#00ff00") if is_running else QColor("#ffffff")
-        for i in range(self.node_list.count()):
-            item = self.node_list.item(i)
-            if item.text() == node_name:
-                item.setForeground(color)
-                break
+
+        # Traverse top-level groups to find the specific child node
+        for i in range(self.node_tree.topLevelItemCount()):
+            parent = self.node_tree.topLevelItem(i)
+            for j in range(parent.childCount()):
+                child = parent.child(j)
+                if child.text(0) == node_name:
+                    child.setForeground(0, color)
+                    return
 
     def closeEvent(self, event):
         for node_name, process in self.running_processes.items():
