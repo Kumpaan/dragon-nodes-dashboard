@@ -4,7 +4,8 @@ import re
 from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
-    QPushButton, QTextEdit, QLabel, QSplitter, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QRadioButton
+    QPushButton, QTextEdit, QLabel, QSplitter, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QRadioButton,
+    QStackedWidget
 )
 from qasync import asyncSlot
 from PySide6.QtGui import QColor
@@ -147,9 +148,9 @@ class DashboardWindow(QMainWindow):
             await self.config_manager.save(commands)
 
             self.node_list.addItem(data["name"])
-            self.terminal_output.append(
-                f"<span style='color: cyan;'>[SYSTEM] Successfully saved node: {data['name']}</span>"
-            )
+            self._create_node_terminal(data["name"])
+            self.node_terminals[data["name"]].append(
+                f"<span style='color: cyan;'>[SYSTEM] Successfully saved node: {data['name']}</span>")
         except Exception as e:
             self.terminal_output.append(
                 f"<span style='color: #ff3333;'>[SYSTEM ERROR] Failed to save config: {str(e)}</span>"
@@ -180,6 +181,9 @@ class DashboardWindow(QMainWindow):
         current_row = self.node_list.currentRow()
         if current_row < 0:
             return
+
+        node_name = self.node_list.item(current_row).text()
+        self._remove_node_terminal(node_name)
 
         commands = await self.config_manager.load()
         commands.pop(current_row)
@@ -235,13 +239,13 @@ class DashboardWindow(QMainWindow):
                 decoded_line = line.strip()
 
             if decoded_line:
-                # ---> ERADICATE ANSI CODES HERE <---
                 clean_line = ANSI_ESCAPE.sub('', decoded_line)
-
-                # Differentiate stderr (red) from stdout (green)
                 color = "#ff3333" if is_error else "#00ff00"
                 formatted_text = f"<span style='color: {color};'>[{node_name}] {clean_line}</span>"
-                self.terminal_output.append(formatted_text)
+
+                # Route the telemetry strictly to this specific node's buffer
+                if node_name in self.node_terminals:
+                    self.node_terminals[node_name].append(formatted_text)
 
         # Purge the process from the registry once the stream dies
         if node_name in self.running_processes and stream == self.running_processes[node_name].stdout:
@@ -292,6 +296,7 @@ class DashboardWindow(QMainWindow):
         self.config_manager = config_manager
         self.executor = executor
         self.running_processes = {}
+        self.node_terminals = {}
         self.setWindowTitle("Dragon Nodes Dashboard")
         self.resize(1100, 700)
 
@@ -361,16 +366,20 @@ class DashboardWindow(QMainWindow):
         self.start_btn.clicked.connect(self.start_node)
         self.stop_btn.clicked.connect(self.stop_node)
 
-        # Terminal output matrix
-        self.terminal_output = QTextEdit()
-        self.terminal_output.setReadOnly(True)
-        self.terminal_output.setStyleSheet("background-color: #0c0c0c; color: #00ff00; font-family: 'Consolas', "
-                                           "monospace; font-size: 12px;")
-        right_layout.addWidget(self.terminal_output)
+        self.detail_stack = QStackedWidget()
+        right_layout.addWidget(self.detail_stack)
+
+        # Create a default blank slate for when nothing is selected
+        self.default_page = QLabel("No node selected.\nSelect a node from the roster to view telemetry.")
+        self.default_page.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.default_page.setStyleSheet("color: gray; font-size: 14px;")
+        self.detail_stack.addWidget(self.default_page)
 
         splitter.addWidget(right_panel)
-
         splitter.setSizes([330, 770])
+
+        # Bind the list selection to dynamically swap the detail view
+        self.node_list.currentItemChanged.connect(self.switch_detail_view)
 
     def closeEvent(self, event):
         """Intercepts the window termination signal to eradicate active processes."""
@@ -385,7 +394,46 @@ class DashboardWindow(QMainWindow):
         try:
             commands = await self.config_manager.load()
             for cmd in commands:
-                self.node_list.addItem(cmd.get("name", "Corrupted Entry"))
+                name = cmd.get("name", "Corrupted Entry")
+                self.node_list.addItem(name)
+                self._create_node_terminal(name)
             self.terminal_output.append("<span style='color: #00ff00;'>[SYSTEM] Configuration loaded successfully.</span>")
         except Exception as e:
+            print(f"Failed to load config: {e}")
             self.terminal_output.append(f"<span style='color: #ff3333;'>[SYSTEM ERROR] Failed to load configuration: {str(e)}</span>")
+
+    def _create_node_terminal(self, node_name: str):
+        """Instantiates a dedicated, styled terminal buffer for a specific node."""
+        if node_name in self.node_terminals:
+            return
+
+        terminal = QTextEdit()
+        terminal.setReadOnly(True)
+        terminal.setStyleSheet(
+            "background-color: #0c0c0c; color: #00ff00; font-family: 'Consolas', monospace; font-size: 12px;"
+        )
+        self.node_terminals[node_name] = terminal
+        self.detail_stack.addWidget(terminal)
+
+    def _remove_node_terminal(self, node_name: str):
+        """Eradicates the terminal buffer from memory when a node is deleted."""
+        if node_name in self.node_terminals:
+            widget = self.node_terminals.pop(node_name)
+            self.detail_stack.removeWidget(widget)
+            widget.deleteLater()
+
+    def switch_detail_view(self, current, previous):
+        """Swaps the visible widget in the right panel based on roster selection."""
+        if not current:
+            self.detail_stack.setCurrentWidget(self.default_page)
+            self.title_label.setText("Select a node to inspect")
+            self.stop_btn.setEnabled(False)
+            return
+
+        node_name = current.text()
+        if node_name in self.node_terminals:
+            self.detail_stack.setCurrentWidget(self.node_terminals[node_name])
+            self.title_label.setText(f"Inspecting: {node_name}")
+
+            # Dynamically toggle the stop button based on the active node's state
+            self.stop_btn.setEnabled(node_name in self.running_processes)
