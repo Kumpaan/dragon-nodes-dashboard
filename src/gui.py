@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTextEdit, QLabel, QSplitter, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QRadioButton
 )
 from qasync import asyncSlot
-
+from PySide6.QtGui import QColor
 
 class CommandDialog(QDialog):
     def __init__(self, parent=None, name="", command=""):
@@ -210,6 +210,8 @@ class DashboardWindow(QMainWindow):
             self.running_processes[node_name] = process
             self.stop_btn.setEnabled(True)
 
+            self._set_node_status_color(node_name, True)
+
             asyncio.create_task(self.stream_terminal(process.stdout, node_name, is_error=False))
             asyncio.create_task(self.stream_terminal(process.stderr, node_name, is_error=True))
         except Exception as e:
@@ -239,6 +241,9 @@ class DashboardWindow(QMainWindow):
         # Purge the process from the registry once the stream dies
         if node_name in self.running_processes and stream == self.running_processes[node_name].stdout:
             self.terminal_output.append(f"<span style='color: yellow;'>[SYSTEM] {node_name} terminated.</span>")
+
+            self._set_node_status_color(node_name, False)
+
             del self.running_processes[node_name]
 
     @asyncSlot()
@@ -267,6 +272,16 @@ class DashboardWindow(QMainWindow):
 
         # Re-fetch the configuration
         await self.initialize_data()
+
+    def _set_node_status_color(self, node_name: str, is_running: bool):
+        """Visually indicates the execution state in the node roster."""
+        color = QColor("#00ff00") if is_running else QColor("#ffffff")  # Green if running, White if idle
+
+        for i in range(self.node_list.count()):
+            item = self.node_list.item(i)
+            if item.text() == node_name:
+                item.setForeground(color)
+                break
 
     def __init__(self, config_manager, executor):
         super().__init__()
