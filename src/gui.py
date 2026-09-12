@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtWidgets import (
@@ -7,6 +8,9 @@ from PySide6.QtWidgets import (
 )
 from qasync import asyncSlot
 from PySide6.QtGui import QColor
+
+# Regex to identify and eradicate ANSI escape sequences
+ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
 class CommandDialog(QDialog):
     def __init__(self, parent=None, name="", command=""):
@@ -219,31 +223,30 @@ class DashboardWindow(QMainWindow):
                 f"<span style='color: #ff3333;'>[SYSTEM ERROR] Failed to execute: {str(e)}</span>")
 
     async def stream_terminal(self, stream, node_name, is_error):
-        """Continuously reads the asynchronous stream and renders it to the GUI."""
+        """Continuously reads the asynchronous byte stream and renders it to the GUI."""
         while True:
             line = await stream.readline()
             if not line:
                 break
 
-            # Handle the architectural discrepancy: local bytes vs. SSH strings
             if isinstance(line, bytes):
-                # errors='replace' prevents a crash if a rogue non-UTF8 byte slips through
                 decoded_line = line.decode('utf-8', errors='replace').strip()
             else:
                 decoded_line = line.strip()
 
             if decoded_line:
+                # ---> ERADICATE ANSI CODES HERE <---
+                clean_line = ANSI_ESCAPE.sub('', decoded_line)
+
                 # Differentiate stderr (red) from stdout (green)
                 color = "#ff3333" if is_error else "#00ff00"
-                formatted_text = f"<span style='color: {color};'>[{node_name}] {decoded_line}</span>"
+                formatted_text = f"<span style='color: {color};'>[{node_name}] {clean_line}</span>"
                 self.terminal_output.append(formatted_text)
 
         # Purge the process from the registry once the stream dies
         if node_name in self.running_processes and stream == self.running_processes[node_name].stdout:
             self.terminal_output.append(f"<span style='color: yellow;'>[SYSTEM] {node_name} terminated.</span>")
-
             self._set_node_status_color(node_name, False)
-
             del self.running_processes[node_name]
 
     @asyncSlot()

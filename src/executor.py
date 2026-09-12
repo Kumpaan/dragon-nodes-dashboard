@@ -26,8 +26,10 @@ class LocalExecutor(BaseExecutor):
     """Executes commands natively on the host machine."""
 
     async def execute(self, command: str):
+        # Wrap the command to force an interactive shell environment
+        wrapped_command = f"bash -ic '{command}'"
         return await asyncio.create_subprocess_shell(
-            command,
+            wrapped_command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
@@ -38,7 +40,6 @@ class LocalExecutor(BaseExecutor):
 
     def reset(self):
         pass
-
 
 class SSHExecutor(BaseExecutor):
     def __init__(self, host: str, username: str, password: str = None, key_path: str = None):
@@ -62,8 +63,11 @@ class SSHExecutor(BaseExecutor):
 
     async def execute(self, command: str):
         conn = await self._get_connection()
-        # asyncssh create_process yields an SSHClientProcess which mirrors asyncio.subprocess streams
-        return await conn.create_process(command)
+        wrapped_command = f"bash -ic '{command}'"
+
+        # request_pty=True simulates a real terminal.
+        # This silences the bash ioctl warnings and prevents ROS from hoarding stdout buffers.
+        return await conn.create_process(wrapped_command, request_pty=True)
 
     def terminate(self, process):
         # asyncssh processes possess a terminate method identical to local subprocesses
