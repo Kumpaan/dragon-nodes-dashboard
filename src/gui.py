@@ -375,7 +375,10 @@ class DashboardWindow(QMainWindow):
         self.ctx_view_title = QLabel("Node Name")
         self.ctx_view_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #56A8F5;")
         self.ctx_view_group = QLabel("Group: Unknown")
-        self.ctx_view_group.setStyleSheet("color: #BCBEC4; margin-bottom: 10px;")
+        self.ctx_view_group.setStyleSheet("color: #BCBEC4;")
+
+        self.ctx_view_dependency = QLabel("Depends on: None")
+        self.ctx_view_dependency.setStyleSheet("color: #E6B522; margin-bottom: 10px; font-weight: bold;")
 
         view_actions = QHBoxLayout()
         edit_btn = QPushButton("✎ Edit Node Properties")
@@ -385,6 +388,7 @@ class DashboardWindow(QMainWindow):
 
         view_layout.addWidget(self.ctx_view_title)
         view_layout.addWidget(self.ctx_view_group)
+        view_layout.addWidget(self.ctx_view_dependency)
         view_layout.addLayout(view_actions)
 
         view_layout.addWidget(QLabel("Terminal Matrix Output:"))
@@ -403,6 +407,7 @@ class DashboardWindow(QMainWindow):
         form_layout = QFormLayout()
         self.ctx_group_input = QComboBox()
         self.ctx_name_input = QLineEdit()
+        self.ctx_dep_input = QComboBox()  # The new dependency dropdown
         self.ctx_cmd_input = QTextEdit()
         self.ctx_cmd_input.setAcceptRichText(False)
         self.ctx_cmd_input.setMinimumHeight(100)
@@ -410,6 +415,7 @@ class DashboardWindow(QMainWindow):
 
         form_layout.addRow("Assigned Group:", self.ctx_group_input)
         form_layout.addRow("Node Identifier:", self.ctx_name_input)
+        form_layout.addRow("Dependency:", self.ctx_dep_input)
         form_layout.addRow("Execution Payload:", self.ctx_cmd_input)
         edit_layout.addLayout(form_layout)
 
@@ -616,6 +622,15 @@ class DashboardWindow(QMainWindow):
         self.current_editing_node = None
         self.ctx_name_input.setText("New_Node")
         self.ctx_group_input.setCurrentText(target_group)
+
+        # Pull all available nodes for the dropdown
+        self.ctx_dep_input.clear()
+        self.ctx_dep_input.addItem("None")
+        for group_card in self.groups.values():
+            for n_name in group_card.nodes.keys():
+                self.ctx_dep_input.addItem(n_name)
+        self.ctx_dep_input.setCurrentText("None")
+
         self.ctx_cmd_input.setText("ros2 run ")
         self.context_stack.setCurrentIndex(2)
 
@@ -640,6 +655,8 @@ class DashboardWindow(QMainWindow):
         cmd = next((c for c in commands if c.get("name") == node_name), None)
         if cmd:
             self.ctx_view_group.setText(f"Group: {cmd.get('group', 'Ungrouped')}")
+            dep = cmd.get("dependency", "None")
+            self.ctx_view_dependency.setText(f"Depends on: {dep if dep else 'None'}")
 
     def _transition_to_node_edit(self):
         if not self.current_editing_node: return
@@ -650,17 +667,28 @@ class DashboardWindow(QMainWindow):
     async def _populate_node_edit_form(self, node_name):
         commands = await self.config_manager.load()
         cmd = next((c for c in commands if c.get("name") == node_name), None)
+
+        self.ctx_dep_input.clear()
+        self.ctx_dep_input.addItem("None")
+        for c in commands:
+            if c.get("name") != node_name:  # Prevent a node from depending on itself
+                self.ctx_dep_input.addItem(c.get("name"))
+
         if cmd:
             self.ctx_group_input.setCurrentText(cmd.get("group", "Ungrouped"))
             self.ctx_name_input.setText(cmd.get("name", ""))
             self.ctx_cmd_input.setText(cmd.get("command", ""))
+            dep = cmd.get("dependency", "None")
+            self.ctx_dep_input.setCurrentText(dep if dep else "None")
 
     @asyncSlot()
     async def _save_node_context(self):
+        dep_val = self.ctx_dep_input.currentText().strip()
         new_data = {
             "group": self.ctx_group_input.currentText().strip() or "Ungrouped",
             "name": self.ctx_name_input.text().strip(),
-            "command": self.ctx_cmd_input.toPlainText().strip()
+            "command": self.ctx_cmd_input.toPlainText().strip(),
+            "dependency": "" if dep_val == "None" else dep_val
         }
 
         if not new_data["name"] or not new_data["command"]:
@@ -738,6 +766,14 @@ class DashboardWindow(QMainWindow):
         commands = await self.config_manager.load()
         cmd = next((c for c in commands if c.get("name") == node_name), None)
         if not cmd: return
+
+        # Enforce execution lock based on dependency
+        dependency = cmd.get("dependency", "")
+        if dependency and dependency != "None":
+            if dependency not in self.running_processes:
+                self.system_log.append(
+                    f"<span style='color: #E53935;'>[SYSTEM LOCK] Ignition aborted for {node_name}. It strictly depends on '{dependency}', which is currently down.</span>")
+                return
 
         command_str = cmd.get("command")
         self.system_log.append(f"<span style='color: #1A73E8;'>[SYSTEM] Igniting {node_name}</span>")
