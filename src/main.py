@@ -1,5 +1,7 @@
 import sys
+import os
 import asyncio
+import hashlib
 from PySide6.QtWidgets import QApplication
 from qasync import QEventLoop
 from src.gui import DashboardWindow, ConnectionDialog
@@ -9,6 +11,23 @@ from src.executor import LocalExecutor, SSHExecutor
 
 def execute():
     app = QApplication(sys.argv)
+    app.setStyleSheet("""
+            QMainWindow { background-color: #121212; }
+            QLabel { color: #E0E0E0; font-family: 'Segoe UI', sans-serif; }
+            QPushButton { 
+                background-color: #2D2D30; color: #FFFFFF; border: 1px solid #3E3E42; 
+                border-radius: 4px; padding: 6px 12px; font-weight: bold;
+            }
+            QPushButton:hover { background-color: #3E3E42; }
+            QPushButton:disabled { background-color: #1E1E1E; color: #555555; border: 1px solid #2A2A2A; }
+            QTreeWidget, QTextEdit { 
+                background-color: #1E1E1E; color: #D4D4D4; border: 1px solid #333333; 
+                border-radius: 4px; padding: 4px;
+            }
+            QTreeWidget::item:selected { background-color: #264F78; color: #FFFFFF; }
+            QSplitter::handle { background-color: #333333; }
+        """)
+
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
 

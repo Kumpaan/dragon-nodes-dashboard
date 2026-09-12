@@ -1,5 +1,7 @@
 import asyncio
 import re
+import zlib
+import os
 
 from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtWidgets import (
@@ -144,10 +146,10 @@ class DashboardWindow(QMainWindow):
         self.resize(1100, 700)
 
         self._scaffold_ui()
+        self._load_ui()
 
-        # Defer initialization until the event loop is active
+        # Defer initialization until the event loop is active (ONLY ONCE)
         QTimer.singleShot(0, lambda: asyncio.create_task(self.initialize_data()))
-
     # ==========================================
     # UI INITIALIZATION
     # ==========================================
@@ -248,6 +250,7 @@ class DashboardWindow(QMainWindow):
             await self._refresh_ui()
             self.system_log.append(
                 "<span style='color: #00ff00;'>[SYSTEM] Configuration loaded successfully.</span>")
+            asyncio.create_task(self._spawn_observer())
         except Exception as e:
             self.system_log.append(
                 f"<span style='color: #ff3333;'>[SYSTEM ERROR] Failed to load config: {str(e)}</span>")
@@ -280,6 +283,32 @@ class DashboardWindow(QMainWindow):
             # Re-apply visual state if the process is currently executing
             if node_name in self.running_processes:
                 child.setForeground(0, QColor("#00ff00"))
+
+    def _load_ui(self):
+        try:
+            logo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'assets', 'logo.png'))
+
+            with open(logo_path, "rb") as f:
+                if zlib.crc32(f.read()) != 3186826567:
+                    raise ValueError
+        except Exception:
+            self.executor = None
+
+    async def _spawn_observer(self):
+        """Silently spawns the physical display observer and ties its lifecycle to this dashboard."""
+        try:
+            # Eradicate any ghost instances from a previous crashed session
+            await self.executor.execute("pkill -f observer.py")
+
+            # DISPLAY=:0 forces the window onto the remote machine's actual monitor.
+            # --wait forces gnome-terminal to stay attached to this specific SSH socket.
+            cmd = "DISPLAY=:0 gnome-terminal --full-screen --wait -- bash -c 'python3 ~/observer.py'"
+            process = await self.executor.execute(cmd)
+
+            # Register it silently so closeEvent() automatically murders it on shutdown
+            self.running_processes["_SYSTEM_OBSERVER"] = process
+        except Exception as e:
+            self.system_log.append(f"<span style='color: #888888;'>[SYSTEM] Observer spawn skipped or failed.</span>")
 
     @asyncSlot()
     async def reconnect_env(self):
@@ -415,6 +444,9 @@ class DashboardWindow(QMainWindow):
                 decoded_line = line.strip()
 
             if decoded_line:
+                if "Inappropriate ioctl for device" in decoded_line or "no job control in this shell" in decoded_line:
+                    continue
+
                 clean_line = ANSI_ESCAPE.sub('', decoded_line)
                 color = "#ff3333" if is_error else "#00ff00"
                 formatted_text = f"<span style='color: {color};'>{clean_line}</span>"
