@@ -23,12 +23,13 @@ QPushButton {
 }
 QPushButton:hover { background-color: #5C6164; border: 1px solid #787B80; }
 QPushButton:pressed { background-color: #6C7174; }
-QPushButton#ActionBtn { background-color: #3574F0; color: #FFFFFF; border: 1px solid #4682FA; }
-QPushButton#ActionBtn:hover { background-color: #4682FA; border: 1px solid #5C94FF; }
-QPushButton#DangerBtn { background-color: #CC666E; color: #FFFFFF; border: 1px solid #D67A81; }
-QPushButton#DangerBtn:hover { background-color: #D67A81; border: 1px solid #E08E94; }
-QPushButton#RunBtn { background-color: #6A8759; color: #FFFFFF; border: 1px solid #7B9A68; }
-QPushButton#RunBtn:hover { background-color: #7B9A68; border: 1px solid #8CAA77; }
+QPushButton:disabled { background-color: #3A3C3E; color: #7A7E85; border: 1px solid #43454A; }
+QPushButton#ActionBtn { background-color: #1A73E8; color: #FFFFFF; border: 1px solid #1059B8; }
+QPushButton#ActionBtn:hover { background-color: #3C8CEF; border: 1px solid #1A73E8; }
+QPushButton#DangerBtn { background-color: #E53935; color: #FFFFFF; border: 1px solid #B71C1C; }
+QPushButton#DangerBtn:hover { background-color: #EF5350; border: 1px solid #D32F2F; }
+QPushButton#RunBtn { background-color: #4CAF50; color: #FFFFFF; border: 1px solid #2E7D32; }
+QPushButton#RunBtn:hover { background-color: #66BB6A; border: 1px solid #388E3C; }
 QLineEdit, QTextEdit, QComboBox {
     background-color: #1E1F22; color: #BCBEC4; border: 1px solid #5B5D61;
     border-radius: 4px; padding: 6px; selection-background-color: #214283;
@@ -136,7 +137,10 @@ class NodeCard(QFrame):
         header.addWidget(self.action_btn)
 
         layout.addLayout(header)
-        cmd_lbl = QLabel(self.command)
+
+        # Rigorous truncation to prevent layout shattering
+        display_cmd = (self.command[:55] + '...') if len(self.command) > 55 else self.command
+        cmd_lbl = QLabel(display_cmd)
         cmd_lbl.setStyleSheet("color: #7A7E85; font-size: 11px;")
         layout.addWidget(cmd_lbl)
 
@@ -151,7 +155,7 @@ class NodeCard(QFrame):
 
     def mousePressEvent(self, event):
         self.clicked.emit(self.name)
-        super().mousePressEvent(event)
+        event.accept()
 
     def set_state(self, state):
         self.state = state
@@ -161,20 +165,20 @@ class NodeCard(QFrame):
         if self.state == "running":
             self.action_btn.setText("Stop")
             self.action_btn.setObjectName("DangerBtn")
+            # Enforcing the pervasive green tint for operational nodes
             self.setStyleSheet(
-                "NodeCard { background-color: #2B2D30; border: 2px solid #6A8759; border-radius: 8px; } NodeCard:hover { background-color: #313438; }")
+                "NodeCard { background-color: #2A3B2C; border: 1px solid #4CAF50; border-radius: 8px; } NodeCard:hover { background-color: #324734; }")
         elif self.state == "error":
             self.action_btn.setText("Run")
             self.action_btn.setObjectName("RunBtn")
             self.setStyleSheet(
-                "NodeCard { background-color: #2B2D30; border: 2px solid #CC666E; border-radius: 8px; } NodeCard:hover { background-color: #313438; }")
+                "NodeCard { background-color: #2B2D30; border: 2px solid #E53935; border-radius: 8px; } NodeCard:hover { background-color: #313438; }")
         else:
             self.action_btn.setText("Run")
             self.action_btn.setObjectName("RunBtn")
             self.setStyleSheet(
                 "NodeCard { background-color: #26282B; border: 1px solid #5B5D61; border-radius: 8px; } NodeCard:hover { background-color: #2F3135; }")
 
-        # Force Qt to re-evaluate the stylesheet based on the new object name
         self.action_btn.style().unpolish(self.action_btn)
         self.action_btn.style().polish(self.action_btn)
 
@@ -214,13 +218,14 @@ class GroupCard(QFrame):
         start_all.setObjectName("RunBtn")
         start_all.clicked.connect(lambda: self.start_all_requested.emit(self.name))
 
-        stop_all = QPushButton("Stop All")
-        stop_all.setObjectName("DangerBtn")
-        stop_all.clicked.connect(lambda: self.stop_all_requested.emit(self.name))
+        self.stop_all_btn = QPushButton("Stop All")
+        self.stop_all_btn.setObjectName("DangerBtn")
+        self.stop_all_btn.setEnabled(False)
+        self.stop_all_btn.clicked.connect(lambda: self.stop_all_requested.emit(self.name))
 
         header_layout.addWidget(new_node_btn)
         header_layout.addWidget(start_all)
-        header_layout.addWidget(stop_all)
+        header_layout.addWidget(self.stop_all_btn)
         self.main_layout.addWidget(header_widget)
 
         self.grid_widget = QWidget()
@@ -230,7 +235,7 @@ class GroupCard(QFrame):
 
     def mousePressEvent(self, event):
         self.clicked.emit(self.name)
-        super().mousePressEvent(event)
+        event.accept()
 
     def add_node(self, node_name, command):
         card = NodeCard(node_name, command)
@@ -245,9 +250,16 @@ class GroupCard(QFrame):
         if node_name in self.nodes:
             self.nodes[node_name].set_state(state)
 
+        # Evaluate operational pool to toggle the killswitch
+        any_running = any(n.state == "running" for n in self.nodes.values())
+        self.stop_all_btn.setEnabled(any_running)
+
     def _rebuild_grid(self):
         for i in reversed(range(self.grid_layout.count())):
             self.grid_layout.itemAt(i).widget().setParent(None)
+
+        self.grid_layout.setColumnStretch(0, 1)
+        self.grid_layout.setColumnStretch(1, 1)
 
         col_count = 2
         row, col = 0, 0
@@ -260,15 +272,22 @@ class GroupCard(QFrame):
 
 
 class DashboardBackground(QWidget):
+    background_clicked = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.logo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'assets', 'logo.png'))
         self.pixmap = QPixmap(self.logo_path)
 
+    def mousePressEvent(self, event):
+        self.background_clicked.emit()
+        event.accept()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         if not self.pixmap.isNull():
-            scaled_pixmap = self.pixmap.scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio,
+            # Amplified watermark scale
+            scaled_pixmap = self.pixmap.scaled(600, 600, Qt.AspectRatioMode.KeepAspectRatio,
                                                Qt.TransformationMode.SmoothTransformation)
             painter.setOpacity(0.05)
             x = (self.width() - scaled_pixmap.width()) // 2
@@ -284,6 +303,7 @@ class DashboardWindow(QMainWindow):
         self.running_processes = {}
         self.node_terminals = {}
         self.groups = {}
+        self.current_editing_node = None
 
         self.setWindowTitle("TU Brno Racing - Driverless Command Center")
         self.resize(1500, 900)
@@ -298,7 +318,6 @@ class DashboardWindow(QMainWindow):
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(10, 10, 10, 10)
 
-        # Top Toolbar
         toolbar = QHBoxLayout()
         add_group_btn = QPushButton("+ New Group")
         add_group_btn.setObjectName("ActionBtn")
@@ -315,7 +334,7 @@ class DashboardWindow(QMainWindow):
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(self.main_splitter)
 
-        # === LEFT PANEL: Dashboard Grid ===
+        # === LEFT PANEL: Dashboard ===
         dash_container = QWidget()
         dash_layout = QVBoxLayout(dash_container)
         dash_layout.setContentsMargins(0, 0, 0, 0)
@@ -324,6 +343,8 @@ class DashboardWindow(QMainWindow):
         self.scroll_area.setWidgetResizable(True)
 
         self.dash_background = DashboardBackground()
+        self.dash_background.background_clicked.connect(lambda: self.context_stack.setCurrentIndex(0))
+
         self.dash_vbox = QVBoxLayout(self.dash_background)
         self.dash_vbox.setSpacing(15)
         self.dash_vbox.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -332,7 +353,9 @@ class DashboardWindow(QMainWindow):
         dash_layout.addWidget(self.scroll_area)
         self.main_splitter.addWidget(dash_container)
 
-        # === RIGHT PANEL: Context & System Log ===
+        # === RIGHT PANEL: Adjustable Context & Console ===
+        self.right_splitter = QSplitter(Qt.Orientation.Vertical)
+
         context_container = QWidget()
         context_layout = QVBoxLayout(context_container)
         context_layout.setContentsMargins(10, 0, 0, 0)
@@ -340,51 +363,77 @@ class DashboardWindow(QMainWindow):
         self.context_stack = QStackedWidget()
         context_layout.addWidget(self.context_stack)
 
-        # Page 0: Idle
+        # 0: Idle Page
         idle_page = QWidget()
         QVBoxLayout(idle_page).addWidget(QLabel("Select a node or group to inspect properties."))
         self.context_stack.addWidget(idle_page)
 
-        # Page 1: Node Context
-        self.node_context = QWidget()
-        node_layout = QVBoxLayout(self.node_context)
+        # 1: Node View Page (Read-only metadata + Matrix)
+        self.node_view_page = QWidget()
+        view_layout = QVBoxLayout(self.node_view_page)
 
-        self.ctx_node_title = QLabel("Node Context")
-        self.ctx_node_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #56A8F5;")
-        node_layout.addWidget(self.ctx_node_title)
+        self.ctx_view_title = QLabel("Node Name")
+        self.ctx_view_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #56A8F5;")
+        self.ctx_view_group = QLabel("Group: Unknown")
+        self.ctx_view_group.setStyleSheet("color: #BCBEC4; margin-bottom: 10px;")
+
+        view_actions = QHBoxLayout()
+        edit_btn = QPushButton("✎ Edit Node Properties")
+        edit_btn.clicked.connect(self._transition_to_node_edit)
+        view_actions.addWidget(edit_btn)
+        view_actions.addStretch()
+
+        view_layout.addWidget(self.ctx_view_title)
+        view_layout.addWidget(self.ctx_view_group)
+        view_layout.addLayout(view_actions)
+
+        view_layout.addWidget(QLabel("Terminal Matrix Output:"))
+        self.terminal_stack = QStackedWidget()
+        view_layout.addWidget(self.terminal_stack)
+        self.context_stack.addWidget(self.node_view_page)
+
+        # 2: Node Edit Page (Form constraints, devoid of Matrix)
+        self.node_edit_page = QWidget()
+        edit_layout = QVBoxLayout(self.node_edit_page)
+
+        edit_header = QLabel("Edit Node Architecture")
+        edit_header.setStyleSheet("font-size: 18px; font-weight: bold; color: #E6B522;")
+        edit_layout.addWidget(edit_header)
 
         form_layout = QFormLayout()
         self.ctx_group_input = QComboBox()
         self.ctx_name_input = QLineEdit()
         self.ctx_cmd_input = QTextEdit()
         self.ctx_cmd_input.setAcceptRichText(False)
-        self.ctx_cmd_input.setMinimumHeight(60)
+        self.ctx_cmd_input.setMinimumHeight(100)
         self.ctx_cmd_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
 
-        form_layout.addRow("Group:", self.ctx_group_input)
-        form_layout.addRow("Node Name:", self.ctx_name_input)
-        form_layout.addRow("Command:", self.ctx_cmd_input)
-        node_layout.addLayout(form_layout)
+        form_layout.addRow("Assigned Group:", self.ctx_group_input)
+        form_layout.addRow("Node Identifier:", self.ctx_name_input)
+        form_layout.addRow("Execution Payload:", self.ctx_cmd_input)
+        edit_layout.addLayout(form_layout)
 
         node_actions = QHBoxLayout()
-        save_btn = QPushButton("Save Node")
+        save_btn = QPushButton("Commit Changes")
         save_btn.setObjectName("ActionBtn")
         save_btn.clicked.connect(self._save_node_context)
 
-        del_btn = QPushButton("Delete Node")
+        del_btn = QPushButton("Obliterate Node")
         del_btn.setObjectName("DangerBtn")
         del_btn.clicked.connect(self._delete_node_context)
 
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(lambda: self.context_stack.setCurrentIndex(
+            1) if self.current_editing_node else self.context_stack.setCurrentIndex(0))
+
         node_actions.addWidget(save_btn)
         node_actions.addWidget(del_btn)
-        node_layout.addLayout(node_actions)
+        node_actions.addStretch()
+        node_actions.addWidget(cancel_btn)
+        edit_layout.addLayout(node_actions)
+        self.context_stack.addWidget(self.node_edit_page)
 
-        node_layout.addWidget(QLabel("Terminal Output:"))
-        self.terminal_stack = QStackedWidget()
-        node_layout.addWidget(self.terminal_stack)
-        self.context_stack.addWidget(self.node_context)
-
-        # Page 2: Group Context
+        # 3: Group Context Page
         self.group_context = QWidget()
         group_layout = QVBoxLayout(self.group_context)
 
@@ -412,27 +461,31 @@ class DashboardWindow(QMainWindow):
         group_layout.addStretch()
         self.context_stack.addWidget(self.group_context)
 
-        # Global System Console explicitly clamped below the properties tab
+        self.right_splitter.addWidget(context_container)
+
+        # Global System Console explicitly placed below the context in the splitter
         log_widget = QWidget()
-        log_widget.setMaximumHeight(200)
         log_layout = QVBoxLayout(log_widget)
-        log_layout.setContentsMargins(0, 10, 0, 0)
+        log_layout.setContentsMargins(10, 10, 0, 0)
         log_layout.addWidget(QLabel("Global System Console"))
         self.system_log = QTextEdit()
         self.system_log.setReadOnly(True)
         log_layout.addWidget(self.system_log)
 
-        context_layout.addWidget(log_widget)
-        self.main_splitter.addWidget(context_container)
+        self.right_splitter.addWidget(log_widget)
+
+        # Configure initial splitter proportions
+        self.right_splitter.setSizes([600, 200])
+        self.main_splitter.addWidget(self.right_splitter)
         self.main_splitter.setSizes([800, 600])
 
     async def initialize_data(self):
-        self.system_log.append("<span style='color: #6A8759;'>[SYSTEM] Hooking into environment architecture...</span>")
+        self.system_log.append("<span style='color: #4CAF50;'>[SYSTEM] Hooking into environment architecture...</span>")
         try:
             await self._refresh_ui()
-            self.system_log.append("<span style='color: #6A8759;'>[SYSTEM] Dashboard populated.</span>")
+            self.system_log.append("<span style='color: #4CAF50;'>[SYSTEM] Dashboard populated.</span>")
         except Exception as e:
-            self.system_log.append(f"<span style='color: #CC666E;'>[SYSTEM ERROR] Dashboard failure: {str(e)}</span>")
+            self.system_log.append(f"<span style='color: #E53935;'>[SYSTEM ERROR] Dashboard failure: {str(e)}</span>")
 
     def _create_group_card(self, group_name):
         g_card = GroupCard(group_name)
@@ -440,7 +493,7 @@ class DashboardWindow(QMainWindow):
         g_card.start_all_requested.connect(self.start_group)
         g_card.stop_all_requested.connect(self.stop_group)
         g_card.new_node_requested.connect(self._prepare_new_node)
-        g_card.node_clicked.connect(self._open_node_context)
+        g_card.node_clicked.connect(self._open_node_view)
         g_card.node_start.connect(self.start_node)
         g_card.node_stop.connect(self.stop_node)
 
@@ -454,7 +507,6 @@ class DashboardWindow(QMainWindow):
                 widget.setParent(None)
         self.groups.clear()
 
-        # Enforce the baseline Ungrouped presence
         self._create_group_card("Ungrouped")
 
         commands = await self.config_manager.load()
@@ -493,9 +545,21 @@ class DashboardWindow(QMainWindow):
         await self.initialize_data()
 
     def _prepare_new_group(self):
-        self.ctx_group_title.setText("Create New Group")
-        self.ctx_group_name_input.setText("New_Macro_Group")
-        self.context_stack.setCurrentIndex(2)
+        base_name = "New_Macro_Group"
+        new_name = base_name
+        counter = 1
+        while new_name in self.groups:
+            new_name = f"{base_name}_{counter}"
+            counter += 1
+
+        # Instantly fabricate the visual card on the grid
+        self._create_group_card(new_name)
+        self._update_group_dropdown()
+
+        # Immediately shift focus to the properties panel for renaming
+        self._open_group_context(new_name)
+        self.system_log.append(
+            f"<span style='color: #4CAF50;'>[SYSTEM] Instantiated empty macro block: {new_name}</span>")
 
     @asyncSlot()
     async def _save_group_context(self):
@@ -503,21 +567,28 @@ class DashboardWindow(QMainWindow):
         new_name = self.ctx_group_name_input.text().strip()
 
         if not new_name:
-            self.system_log.append("<span style='color: #CC666E;'>[SYSTEM] Aborted save: Group requires a name.</span>")
+            self.system_log.append(
+                "<span style='color: #E53935;'>[SYSTEM] Aborted save: Group necessitates explicit nomenclature.</span>")
             return
 
-        commands = await self.config_manager.load()
-        if old_name != "Create New Group" and old_name != new_name:
+        if old_name != new_name:
+            # Dynamically rename the visual card in the UI layer
+            if old_name in self.groups:
+                group_card = self.groups.pop(old_name)
+                group_card.name = new_name
+                group_card.title.setText(new_name)
+                self.groups[new_name] = group_card
+
+            # Propagate the rename to all underlying nodes within the persistent configuration
+            commands = await self.config_manager.load()
             for cmd in commands:
                 if cmd.get("group") == old_name:
                     cmd["group"] = new_name
             await self.config_manager.save(commands)
-        elif old_name == "Create New Group" and new_name not in self.groups:
-            self._create_group_card(new_name)
             self._update_group_dropdown()
 
-        self.system_log.append(f"<span style='color: #6A8759;'>[SYSTEM] Processed group entity: {new_name}</span>")
-        await self._refresh_ui()
+        self.system_log.append(
+            f"<span style='color: #4CAF50;'>[SYSTEM] Persisted group entity modification: {new_name}</span>")
         self._open_group_context(new_name)
 
     @asyncSlot()
@@ -542,20 +613,50 @@ class DashboardWindow(QMainWindow):
         await self._refresh_ui()
 
     def _prepare_new_node(self, target_group="Ungrouped"):
+        self.current_editing_node = None
         self.ctx_name_input.setText("New_Node")
         self.ctx_group_input.setCurrentText(target_group)
         self.ctx_cmd_input.setText("ros2 run ")
-        self.ctx_node_title.setText("Create New Node")
-        self.context_stack.setCurrentIndex(1)
+        self.context_stack.setCurrentIndex(2)
 
         temp_term = QTextEdit("Save node configuration to initialize terminal matrix.")
         temp_term.setReadOnly(True)
         self.terminal_stack.addWidget(temp_term)
         self.terminal_stack.setCurrentWidget(temp_term)
 
+    def _open_node_view(self, node_name):
+        self.current_editing_node = node_name
+        self.ctx_view_title.setText(node_name)
+
+        asyncio.create_task(self._populate_node_view_metadata(node_name))
+
+        if node_name in self.node_terminals:
+            self.terminal_stack.setCurrentWidget(self.node_terminals[node_name])
+
+        self.context_stack.setCurrentIndex(1)
+
+    async def _populate_node_view_metadata(self, node_name):
+        commands = await self.config_manager.load()
+        cmd = next((c for c in commands if c.get("name") == node_name), None)
+        if cmd:
+            self.ctx_view_group.setText(f"Group: {cmd.get('group', 'Ungrouped')}")
+
+    def _transition_to_node_edit(self):
+        if not self.current_editing_node: return
+
+        asyncio.create_task(self._populate_node_edit_form(self.current_editing_node))
+        self.context_stack.setCurrentIndex(2)
+
+    async def _populate_node_edit_form(self, node_name):
+        commands = await self.config_manager.load()
+        cmd = next((c for c in commands if c.get("name") == node_name), None)
+        if cmd:
+            self.ctx_group_input.setCurrentText(cmd.get("group", "Ungrouped"))
+            self.ctx_name_input.setText(cmd.get("name", ""))
+            self.ctx_cmd_input.setText(cmd.get("command", ""))
+
     @asyncSlot()
     async def _save_node_context(self):
-        old_name = self.ctx_node_title.text().replace("Context: ", "")
         new_data = {
             "group": self.ctx_group_input.currentText().strip() or "Ungrouped",
             "name": self.ctx_name_input.text().strip(),
@@ -564,13 +665,14 @@ class DashboardWindow(QMainWindow):
 
         if not new_data["name"] or not new_data["command"]:
             self.system_log.append(
-                "<span style='color: #CC666E;'>[SYSTEM] Aborted save: Node requires unambiguous name and command syntax.</span>")
+                "<span style='color: #E53935;'>[SYSTEM] Aborted save: Node requires unambiguous name and command syntax.</span>")
             return
 
         commands = await self.config_manager.load()
 
-        if old_name != "Create New Node":
-            target_idx = next((i for i, cmd in enumerate(commands) if cmd.get("name") == old_name), None)
+        if self.current_editing_node:
+            target_idx = next((i for i, cmd in enumerate(commands) if cmd.get("name") == self.current_editing_node),
+                              None)
             if target_idx is not None:
                 commands[target_idx] = new_data
         else:
@@ -578,9 +680,9 @@ class DashboardWindow(QMainWindow):
 
         await self.config_manager.save(commands)
         self.system_log.append(
-            f"<span style='color: #6A8759;'>[SYSTEM] Injected {new_data['name']} into configuration matrix.</span>")
+            f"<span style='color: #4CAF50;'>[SYSTEM] Injected {new_data['name']} into configuration matrix.</span>")
         await self._refresh_ui()
-        self._open_node_context(new_data["name"])
+        self._open_node_view(new_data["name"])
 
     @asyncSlot()
     async def _delete_node_context(self):
@@ -603,29 +705,13 @@ class DashboardWindow(QMainWindow):
 
         self.system_log.append(f"<span style='color: #E6B522;'>[SYSTEM] Purged {target_name} from architecture.</span>")
         self.context_stack.setCurrentIndex(0)
+        self.current_editing_node = None
         await self._refresh_ui()
-
-    def _open_node_context(self, node_name):
-        self.ctx_node_title.setText(f"Context: {node_name}")
-        asyncio.create_task(self._populate_node_form(node_name))
-
-        if node_name in self.node_terminals:
-            self.terminal_stack.setCurrentWidget(self.node_terminals[node_name])
-
-        self.context_stack.setCurrentIndex(1)
-
-    async def _populate_node_form(self, node_name):
-        commands = await self.config_manager.load()
-        cmd = next((c for c in commands if c.get("name") == node_name), None)
-        if cmd:
-            self.ctx_group_input.setCurrentText(cmd.get("group", "Ungrouped"))
-            self.ctx_name_input.setText(cmd.get("name", ""))
-            self.ctx_cmd_input.setText(cmd.get("command", ""))
 
     def _open_group_context(self, group_name):
         self.ctx_group_title.setText(f"Context: {group_name}")
         self.ctx_group_name_input.setText(group_name)
-        self.context_stack.setCurrentIndex(2)
+        self.context_stack.setCurrentIndex(3)
 
     @asyncSlot()
     async def start_group(self, group_name):
@@ -654,7 +740,7 @@ class DashboardWindow(QMainWindow):
         if not cmd: return
 
         command_str = cmd.get("command")
-        self.system_log.append(f"<span style='color: #287BDE;'>[SYSTEM] Igniting {node_name}</span>")
+        self.system_log.append(f"<span style='color: #1A73E8;'>[SYSTEM] Igniting {node_name}</span>")
         self.node_terminals[node_name].append(f"<span style='color: #7A7E85;'>$ {command_str}</span><br>")
 
         try:
@@ -667,7 +753,7 @@ class DashboardWindow(QMainWindow):
         except Exception as e:
             self._set_node_status(node_name, "error")
             self.system_log.append(
-                f"<span style='color: #CC666E;'>[SYSTEM ERROR] Execution shattered for {node_name}: {str(e)}</span>")
+                f"<span style='color: #E53935;'>[SYSTEM ERROR] Execution shattered for {node_name}: {str(e)}</span>")
 
     @asyncSlot()
     async def stop_node(self, node_name: str):
@@ -695,7 +781,19 @@ class DashboardWindow(QMainWindow):
                     continue
 
                 clean_line = ANSI_ESCAPE.sub('', decoded_line)
-                color = "#CC666E" if is_error else "#BCBEC4"
+
+                # Intercept ROS 2 idiosyncrasies where standard info spills into stderr
+                color = "#BCBEC4"  # Default terminal grey
+                if "[ERROR]" in clean_line or "[FATAL]" in clean_line:
+                    color = "#E53935"
+                elif "[WARN]" in clean_line:
+                    color = "#E6B522"
+                elif "[INFO]" in clean_line or "[DEBUG]" in clean_line:
+                    color = "#BCBEC4"
+                elif is_error:
+                    # Fallback: Unformatted raw tracebacks cascading through stderr
+                    color = "#E53935"
+
                 formatted_text = f"<span style='color: {color};'>{clean_line}</span>"
 
                 if node_name in self.node_terminals:
@@ -729,7 +827,7 @@ class DashboardWindow(QMainWindow):
 
     async def async_shutdown(self):
         self.system_log.append(
-            "<span style='color: #CC666E;'>[SYSTEM] Exterminating all loose threads before termination...</span>")
+            "<span style='color: #E53935;'>[SYSTEM] Exterminating all loose threads before termination...</span>")
         commands = await self.config_manager.load()
 
         for node_name in list(self.running_processes.keys()):
