@@ -297,18 +297,23 @@ class DashboardWindow(QMainWindow):
     async def _spawn_observer(self):
         """Silently spawns the physical display observer and ties its lifecycle to this dashboard."""
         try:
-            # Eradicate any ghost instances from a previous crashed session
             await self.executor.execute("pkill -f observer.py")
 
-            # DISPLAY=:0 forces the window onto the remote machine's actual monitor.
-            # --wait forces gnome-terminal to stay attached to this specific SSH socket.
-            cmd = "DISPLAY=:0 gnome-terminal --full-screen --wait -- bash -c 'python3 ~/observer.py'"
-            process = await self.executor.execute(cmd)
+            # The Holy Grail for spawning GUI apps over SSH on modern Ubuntu.
+            # Injects the active user's D-Bus address to bypass Wayland/GNOME restrictions.
+            dbus_cmd = "export DISPLAY=:0 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus"
+            term_cmd = "gnome-terminal --full-screen --wait -- bash -c 'python3 ~/observer.py'"
 
-            # Register it silently so closeEvent() automatically murders it on shutdown
+            cmd = f"{dbus_cmd} && {term_cmd}"
+
+            process = await self.executor.execute(cmd)
             self.running_processes["_SYSTEM_OBSERVER"] = process
+
+            asyncio.create_task(self.stream_terminal(process.stdout, "_SYSTEM_OBSERVER", is_error=False))
+            asyncio.create_task(self.stream_terminal(process.stderr, "_SYSTEM_OBSERVER", is_error=True))
+
         except Exception as e:
-            self.system_log.append(f"<span style='color: #888888;'>[SYSTEM] Observer spawn skipped or failed.</span>")
+            self.system_log.append(f"<span style='color: #ff3333;'>[SYSTEM] Observer spawn failed: {str(e)}</span>")
 
     @asyncSlot()
     async def reconnect_env(self):
@@ -466,22 +471,27 @@ class DashboardWindow(QMainWindow):
         current_item = self.node_tree.currentItem()
         if not current_item: return
 
-        # Determine if a folder or a file was clicked
         is_group = current_item.childCount() > 0 or current_item.parent() is None
 
         if is_group:
-            # Macro stop: Murder everything inside the folder
             for i in range(current_item.childCount()):
-                node_name = current_item.child(i).text(0)
+                child = current_item.child(i)
+                node_name = child.text(0)
                 if node_name in self.running_processes:
-                    self.executor.terminate(self.running_processes[node_name])
-                    self.system_log.append(f"<span style='color: yellow;'>[SYSTEM] Sent SIGTERM to {node_name}.</span>")
+                    command_str = child.data(0, Qt.ItemDataRole.UserRole)
+                    # Extract the fundamental node name to ensure an accurate headshot
+                    target_process = command_str.split()[-1]
+                    await self.executor.execute(f"pkill -f '{target_process}'")
+                    self.system_log.append(
+                        f"<span style='color: yellow;'>[SYSTEM] Sent KILL order for {node_name}.</span>")
         else:
-            # Single stop
             node_name = current_item.text(0)
             if node_name in self.running_processes:
-                self.executor.terminate(self.running_processes[node_name])
-                self.system_log.append(f"<span style='color: yellow;'>[SYSTEM] Sent SIGTERM to {node_name}.</span>")
+                command_str = current_item.data(0, Qt.ItemDataRole.UserRole)
+                # Extract the fundamental node name to ensure an accurate headshot
+                target_process = command_str.split()[-1]
+                await self.executor.execute(f"pkill -f '{target_process}'")
+                self.system_log.append(f"<span style='color: yellow;'>[SYSTEM] Sent KILL order for {node_name}.</span>")
 
     # ==========================================
     # UI HELPERS & OVERRIDES
@@ -529,4 +539,10 @@ class DashboardWindow(QMainWindow):
     def closeEvent(self, event):
         for node_name, process in self.running_processes.items():
             self.executor.terminate(process)
+
+        # Nuke the master SSH connection. This causes the remote OpenSSH daemon
+        # to forcefully send SIGHUP to all running child processes tied to this session,
+        # guaranteeing no orphaned zombie processes are left on the ASS PC.
+        self.executor.reset()
+
         event.accept()

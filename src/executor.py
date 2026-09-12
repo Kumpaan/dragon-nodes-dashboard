@@ -63,15 +63,15 @@ class SSHExecutor(BaseExecutor):
 
     async def execute(self, command: str):
         conn = await self._get_connection()
-        wrapped_command = f"bash -ic '{command}'"
-
-        # request_pty=True simulates a real terminal.
-        # This silences the bash ioctl warnings and prevents ROS from hoarding stdout buffers.
-        return await conn.create_process(wrapped_command, request_pty=True)
+        # Inject the display variables so the graphical output actually renders
+        env_vars = "export DISPLAY=:0 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus"
+        wrapped_command = f"{env_vars} && source ~/.bashrc && {command}"
+        return await conn.create_process(wrapped_command)
 
     def terminate(self, process):
-        # asyncssh processes possess a terminate method identical to local subprocesses
-        process.terminate()
+        # We handle targeted termination via pkill in the GUI now.
+        # This just prevents PySide6 from crashing if it attempts a fallback kill.
+        pass
 
     def reset(self):
         # If a connection exists, aggressively close it and wipe it from memory
