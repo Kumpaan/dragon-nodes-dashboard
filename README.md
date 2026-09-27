@@ -28,3 +28,6 @@ The layout is structured into a three-pane docking workspace designed for rapid 
     *   _Group Cards:_ Utilize the "Run All" or "Stop All" buttons to execute bulk boot or assassination sequences for an entire cluster of nodes simultaneously.
 2.  **Contextual Editor (Top Right):** Selecting any node or group transforms this pane into a configuration editor. Here, you can mutate the node's identifier, reassign its group, or rewrite the underlying ROS 2 command. This panel also houses the isolated terminal matrix displaying standard output and error streams for the active selection.
 3.  **System Console (Bottom Right):** A read-only diagnostic log tracking fundamental background events, SSH socket states, and network errors. If shit breaks, look here.
+
+---
+*This project was mostly vibe-coded with Gemini Pro 3.1*
